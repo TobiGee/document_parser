@@ -165,3 +165,4 @@ batch_images/
 batch_texts/
 **txt
 **gguf
+.DS_Store
