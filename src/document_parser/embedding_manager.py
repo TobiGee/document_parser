@@ -6,7 +6,7 @@ OpenAI - https://cookbook.openai.com/examples/vector_databases/qdrant/getting_st
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-from openai import OpenAI
+from openai import OpenAI, BadRequestError
 import os
 import pandas as pd
 from pathlib import Path
@@ -20,24 +20,7 @@ class EmbeddingManager:
 
     def _init_qdrant(self) -> None:
         self._QDRANT_CLIENT = QdrantClient(url="http://localhost:6333")
-        collections = []
-        try:
-            print("Trying to receive qdrant collections:")
-            collections = [
-                name[1][0].name for name in self._QDRANT_CLIENT.get_collections()
-            ]
-            print(collections)
-        except Exception as e:
-            print(e)
-            print("Error: Qdrant client could not be reached.")
-
-        if not "default_collection" in collections:
-            self._QDRANT_CLIENT.create_collection(
-                collection_name="default_collection",
-                vectors_config=VectorParams(
-                    size=self._EMBEDDING_SIZE, distance=Distance.DOT
-                ),
-            )
+        self._check_if_collection_exists("default_collection")
 
     def _init_openai(self):
         if os.getenv("OPENAI_API_KEY") is not None:
@@ -48,6 +31,8 @@ class EmbeddingManager:
         self._EMBEDDING_MODEL = "text-embedding-3-small"
         if self._EMBEDDING_MODEL == "text-embedding-3-small":
             self._EMBEDDING_SIZE = 1536
+        elif self._EMBEDDING_MODEL == "text-embedding-3-large":
+            self._EMBEDDING_SIZE = 3072
 
     def find_embedding(self, query) -> str:
 
@@ -62,13 +47,16 @@ class EmbeddingManager:
         return query_results
 
     def _get_embedding(self, text):
-        em = (
-            self._OPENAI_CLIENT.embeddings.create(
-                input=[text], model=self._EMBEDDING_MODEL
+        try:
+            em = (
+                self._OPENAI_CLIENT.embeddings.create(
+                    input=[text], model=self._EMBEDDING_MODEL
+                )
+                .data[0]
+                .embedding
             )
-            .data[0]
-            .embedding
-        )
+        except BadRequestError as e:
+            print(e)
         return em
 
     def store_txt_data_from_dir(
@@ -80,10 +68,31 @@ class EmbeddingManager:
             with open(pth, "r") as file:
                 text = file.read()
                 self._store_single_embedding(text=text, collection_name=collection_name)
-                return
+
+    def _check_if_collection_exists(self, collection_name, create_on_missing=True):
+        collections = []
+        try:
+            print("Trying to receive qdrant collections:")
+            collections = [
+                name[1][0].name for name in self._QDRANT_CLIENT.get_collections()
+            ]
+        except Exception as e:
+            print(e)
+            print("Error: Qdrant client could not be reached.")
+        print(collections)
+        in_collection = not collection_name in collections
+        print(in_collection)
+        if in_collection and create_on_missing:
+            self._QDRANT_CLIENT.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=self._EMBEDDING_SIZE, distance=Distance.DOT
+                ),
+            )
 
     def _store_single_embedding(self, text: str, collection_name="default_collection"):
         em = self._get_embedding(text=text)
+        self._check_if_collection_exists(collection_name)
         self._QDRANT_CLIENT.upsert(
             collection_name=collection_name,
             points=[
@@ -104,6 +113,6 @@ class EmbeddingManager:
 if __name__ == "__main__":
     a = EmbeddingManager()
     a.store_txt_data_from_dir(
-        "/Users/tobiasgerlach/Documents/Code/document_parser/src/document_parser/batch_texts",
-        collection_name="test",
+        "/Users/tobiasgerlach/Documents/Code/document_parser/src/document_parser/batch_chapters/",
+        collection_name="chapters",
     )
